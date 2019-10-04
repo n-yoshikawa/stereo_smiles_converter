@@ -1,58 +1,40 @@
+from rdkit import Chem
+
 class smilesEncoder:
     def __init__(self):
-        self.pos = 0
+        self.visited = []
 
     def encode_smiles(self, smiles):
-        self.pos = 0
-        return self.get_branch(smiles)
+        mol = Chem.MolFromSmiles(smiles)
+        self.visited = [False for _ in range(mol.GetNumAtoms())]
+        newOrder =self. dfs(0, mol, [])
+        nm = Chem.RenumberAtoms(mol, newOrder)
+        return Chem.MolToSmiles(nm, canonical=False)
 
-
-    def get_branch(self, smiles):
-        chain1 = self.get_chain(smiles)
-        if self.pos == len(smiles) or smiles[self.pos] == ')':
-            return chain1
-        self.pos += 1  # skip '['
-        bracket_atom = ''
-        while smiles[self.pos] != ']':
-            bracket_atom += smiles[self.pos]
-            self.pos += 1
-        clockwise = False
-        if '@@' in bracket_atom:
-            clockwise = True
-        bracket_atom = bracket_atom.replace('@', '')
-        bracket_atom = bracket_atom.replace('H', '')
-        self.pos += 1  # skip ']'
-        branch1 = ''
-        if smiles[self.pos] == '(':
-            self.pos += 1  # skip '('
-            branch1 = self.get_branch(smiles)
-            self.pos += 1  # skip ')'
-        branch2 = ""
-        if smiles[self.pos] == '(':
-            self.pos += 1  # skip '('
-            branch2 = self.get_branch(smiles)
-            self.pos += 1  # skip ')'
-        chain2 = self.get_branch(smiles)
-        if clockwise:
-            if branch2 == '':
-                return "{}{}({}){}".format(chain1, bracket_atom, chain2, branch1)
-            else:
-                return "{}{}({})({}){}".format(chain1, bracket_atom,
-                                               branch2, branch1, chain2)
-        else:
-            if branch2 == '':
-                return "{}{}({}){}".format(chain1, bracket_atom, branch1, chain2)
-            else:
-                return "{}{}({})({}){}".format(chain1, bracket_atom,
-                                               branch1, branch2, chain2)
-
-    def get_chain(self, smiles):
-        chain = ''
-        while self.pos < len(smiles) and smiles[self.pos] not in ['[', ')']:
-            chain += smiles[self.pos]
-            self.pos += 1
-        return chain
-
+    def dfs(self, idx, mol, order):
+        if self.visited[idx]:
+            return order
+        order.append(idx)
+        self.visited[idx] = True
+        atom = mol.GetAtomWithIdx(idx)
+        nbr = [x.GetIdx() for x in atom.GetNeighbors()]
+        #print(atom.GetSymbol(), atom.GetChiralTag(), nbr)
+        hasFrom = False
+        if nbr[0] < atom.GetIdx():
+            hasFrom = True
+        #print(hasFrom)
+        if atom.GetChiralTag() == Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CW:
+            if hasFrom:  # e.g. N[C@@](Br)(C)(O)
+                nbr[1:] = reversed(nbr[1:])
+            elif not hasFrom and len(nbr) == 4: # e.g. [C@H](N)(O)(C)
+                nbr[1:] = reversed(nbr[1:])
+        elif atom.GetChiralTag() == Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CCW:
+            if not hasFrom and len(nbr) == 3:  # e.g. [C@H](Br)(C)O
+                nbr = reversed(nbr)
+        # print(nbr)
+        for n in nbr:
+            order = self.dfs(n, mol, order)
+        return order
 
 a = smilesEncoder()
 print("Supported case:")
@@ -68,8 +50,8 @@ smiles = "[C@H](N)(O)C"
 print(smiles, '->', a.encode_smiles(smiles))
 smiles = "[C@@H](N)(O)C"
 print(smiles, '->', a.encode_smiles(smiles))
-print("Unsupported case:")
 smiles = "[C@@](Br)(N)(O)C"
 print(smiles, '->', a.encode_smiles(smiles))
+print("Unsupported case:")
 smiles = "[C@]1(Br)(Cl)CCCC(F)C1"
 print(smiles, '->', a.encode_smiles(smiles))
