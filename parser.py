@@ -111,7 +111,6 @@ def smilesToMol(smiles):
         nonlocal ptr, prev, vprev, order, updown
         while ptr < len(smiles):
             token = smiles[ptr]
-            #print("prev: {}, ptr: {}, token: {}, order: {}".format(prev, ptr, token, order))
             # ring open/close
             if token in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
                 if prev == -1:
@@ -175,6 +174,8 @@ class Molecule:
     def AddBond(self, begin, end, order):
         bond = Bond(begin, end, order)
         self.bonds.append(bond)
+        self.atoms[begin].nbr.append(end)
+        self.atoms[end].nbr.append(begin)
         return bond
 
     def GetBond(self, idx):
@@ -193,10 +194,13 @@ class Atom:
         self.element = ""
         self.charge = 0
         self.hcount = 0
+        self.newidx = -1
+        self.nbr = []
         self.tetrahedralStereo = None
+        self.ringClosure = False
 
     def __repr__(self):
-        return "({}, idx: {}, charge: {}, {})".format(self.element, self.idx, self.charge, self.tetrahedralStereo)
+        return "({}, idx: {}, newidx: {}, charge: {}, h: {}, nbr: {}, rc: {}, {})".format(self.element, self.idx, self.newidx, self.charge, self.hcount, self.nbr, self.ringClosure, self.tetrahedralStereo)
 
 
 class Bond:
@@ -215,10 +219,81 @@ class ringClosure:
         self.digit = digit
         self.prev = prev
         self.order = order
+
     def __repr__(self):
         return "(digit: {}, prev: {}, order: {})".format(
                 self.digit, self.prev, self.order)
 
-mol = smilesToMol("N1C[C@H]2CC=CC[C@@H]2C1")
-print(mol.bonds)
-print(mol.atoms)
+# find ring closure
+def generateSmiles(mol):
+    usedDigit = []
+    rcstack = []
+
+    # decide atom order and find ring closure
+    order = []
+    visited = [False for _ in range(len(mol.atoms))]
+    stack = [(-1, 0)]
+    while stack:
+        prev, idx = stack.pop()
+        if visited[idx] and prev > idx+1:
+            mol.atoms[idx].ringClosure = True
+        if not visited[idx]:
+            order.append(idx)
+            mol.atoms[idx].newidx = len(order) - 1
+            visited[idx] = True
+            atom = mol.atoms[idx]
+            nbr = atom.nbr
+            if atom.tetrahedralStereo != 'Clockwise':
+                nbr = reversed(nbr)
+            for a in nbr:
+                stack.append((idx, a))
+
+    def generateBranchSmiles(idx):
+        nonlocal mol, order, usedDigit, rcstack
+        smiles = ""
+        while True:
+            atom = mol.atoms[idx]
+            if atom.tetrahedralStereo is None:
+                smiles += atom.element
+            else:
+                smiles += '[' + atom.element + '@H]'
+            # if ring is starting
+            if atom.ringClosure:
+                if not usedDigit:
+                    digit = 1
+                else:
+                    digit = min(usedDigit) + 1
+                usedDigit.append(digit)
+                rc = ringClosure(digit, idx, -1)
+                rcstack.append(rc)
+                smiles += str(digit)
+            # if branching (buggy)
+            numBranch = len([mol.atoms[n].newidx > atom.newidx for n in atom.nbr])
+            if (atom.ringClosure and numBranch > 1) or (not atom.ringClosure and numBranch > 2):
+                smiles += '('
+                idx, branch = generateBranchSmiles(idx+1)
+                smiles += branch
+                smiles += ')'
+            ringDest = [mol.atoms[n].newidx for n in atom.nbr if mol.atoms[n].newidx < atom.newidx]
+            for rc in rcstack:
+                if rc.prev < atom.newidx - 1 and rc.prev in ringDest:
+                    smiles += str(rc.digit)
+                    usedDigit.remove(rc.digit)
+            if idx+1 >= len(order) or order[idx+1] not in atom.nbr:
+                return idx, smiles
+            else:
+                for b in mol.bonds:
+                    if b.begin == idx and b.end == idx + 1:
+                        if b.order == 2:
+                            smiles += '='
+                        elif b.order == 3:
+                            smiles += '#'
+                idx += 1
+    _, smiles = generateBranchSmiles(0)
+    return smiles
+
+def evaluate(smiles):
+    mol = smilesToMol(smiles)
+    print(smiles, '->', generateSmiles(mol))
+
+evaluate('N1C[C@H]2CC=CC[C@@H]2C1')
