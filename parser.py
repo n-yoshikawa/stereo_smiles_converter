@@ -1,3 +1,6 @@
+from rdkit import Chem
+import copy
+
 def smilesToMol(smiles):
     prev = -1
     vprev = []
@@ -226,37 +229,57 @@ class ringClosure:
 
 # find ring closure
 def generateSmiles(mol):
-    usedDigit = []
-    rcstack = []
-
     # decide atom order and find ring closure
     order = []
     visited = [False for _ in range(len(mol.atoms))]
     stack = [(-1, 0)]
+    rcbond = []
+
+    for atom in mol.atoms:
+        atom.nbr = sorted(atom.nbr)
+
     while stack:
         prev, idx = stack.pop()
-        if visited[idx] and prev > idx+1:
-            mol.atoms[idx].ringClosure = True
         if not visited[idx]:
             order.append(idx)
             mol.atoms[idx].newidx = len(order) - 1
             visited[idx] = True
             atom = mol.atoms[idx]
-            nbr = atom.nbr
-            if atom.tetrahedralStereo != 'Clockwise':
-                nbr = reversed(nbr)
+            nbr = copy.deepcopy(atom.nbr)
+            if atom.tetrahedralStereo != 'Clockwise':  # need to maintain order
+                if atom.hcount == 1:
+                    nbr = reversed(nbr)
+                elif atom.hcount == 0 and len([True for n in nbr if n < idx]) < 1:
+                    nbr = reversed(nbr)
+                else:
+                    nbr[1:] = reversed(nbr[1:])
+            else:
+                nbr = [nbr[-2], nbr[-1]] + list(reversed(nbr[:-2]))
+
             for a in nbr:
-                stack.append((idx, a))
+                if not visited[a]:
+                    stack.append((idx, a))
+                elif a != prev:
+                    mol.atoms[a].ringClosure = True
+                    rcbond.append((a, idx))
+
+    usedDigit = []
+    rcstack = []
+    pstack = []
 
     def generateBranchSmiles(idx):
-        nonlocal mol, order, usedDigit, rcstack
+        nonlocal mol, order, usedDigit, rcstack, rcbond, pstack
         smiles = ""
+        prev = pstack.pop()
         while True:
             atom = mol.atoms[idx]
             if atom.tetrahedralStereo is None:
                 smiles += atom.element
             else:
-                smiles += '[' + atom.element + '@H]'
+                smiles += '[' + atom.element + '@'
+                if atom.hcount == 1:
+                    smiles += 'H'
+                smiles += ']'
             # if ring is starting
             if atom.ringClosure:
                 if not usedDigit:
@@ -267,33 +290,54 @@ def generateSmiles(mol):
                 rc = ringClosure(digit, idx, -1)
                 rcstack.append(rc)
                 smiles += str(digit)
-            # if branching (buggy)
-            numBranch = len([mol.atoms[n].newidx > atom.newidx for n in atom.nbr])
-            if (atom.ringClosure and numBranch > 1) or (not atom.ringClosure and numBranch > 2):
-                smiles += '('
-                idx, branch = generateBranchSmiles(idx+1)
-                smiles += branch
-                smiles += ')'
-            ringDest = [mol.atoms[n].newidx for n in atom.nbr if mol.atoms[n].newidx < atom.newidx]
-            for rc in rcstack:
-                if rc.prev < atom.newidx - 1 and rc.prev in ringDest:
-                    smiles += str(rc.digit)
-                    usedDigit.remove(rc.digit)
-            if idx+1 >= len(order) or order[idx+1] not in atom.nbr:
+            # if there is branch (buggy)
+            branch = sorted([(mol.atoms[n].newidx, n) for n in atom.nbr if n != prev and (idx, n) not in rcbond])
+            branch = [i for newidx, i in branch]
+            if not branch:
                 return idx, smiles
+            while len(branch) > 1:
+                smiles += '('
+                pstack.append(idx)
+                bidx = branch.pop(0)
+                _, branch_smiles = generateBranchSmiles(bidx)
+                smiles += branch_smiles
+                smiles += ')'
+            nidx = branch.pop()
+            # if end of ring
+            if mol.atoms[nidx].newidx < atom.newidx:
+                if not rcstack:
+                    return idx, smiles
+                for rc in rcstack:
+                    if rc.prev == nidx:
+                        smiles += str(rc.digit)
+                        rcstack.remove(rc)
+                        return idx, smiles
+                        #usedDigit.remove(rc.digit)
+            # ordinary case
             else:
                 for b in mol.bonds:
-                    if b.begin == idx and b.end == idx + 1:
+                    if b.begin == idx and b.end == nidx:
                         if b.order == 2:
                             smiles += '='
                         elif b.order == 3:
                             smiles += '#'
-                idx += 1
+                prev = idx
+                idx = nidx
+    pstack = [-1]
     _, smiles = generateBranchSmiles(0)
     return smiles
 
 def evaluate(smiles):
-    mol = smilesToMol(smiles)
-    print(smiles, '->', generateSmiles(mol))
+ mol = smilesToMol(smiles)
+ new_smiles = generateSmiles(mol)
+ isCorrect = (Chem.MolToSmiles(Chem.MolFromSmiles(smiles)) == Chem.MolToSmiles(Chem.MolFromSmiles(new_smiles)))
+ print(isCorrect, smiles, '->', new_smiles)
 
-evaluate('N1C[C@H]2CC=CC[C@@H]2C1')
+evaluate('N[C@](O)(Br)C')
+evaluate('N[C@@](O)(Br)C')
+evaluate('[C@H](N)(O)C')
+evaluate('[C@@H](N)(O)C')
+evaluate('[C@](Br)(N)(O)C')
+evaluate('[C@@](Br)(N)(O)C')
+evaluate('[C@]1(Br)(Cl)CCCC(F)C1')
+evaluate('[C@@]1(Br)(Cl)CCCC(F)C1')
