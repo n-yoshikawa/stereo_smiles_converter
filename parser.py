@@ -13,9 +13,13 @@ def smilesToMol(smiles):
     def parseSimple():
         nonlocal mol, ptr, prev, vprev, order, updown, rclose
         element = smiles[ptr]
-        if element.isupper() and ptr+1 < len(smiles) and smiles[ptr+1].islower():
-            element += smiles[ptr+1]
-            ptr += 1
+        if ptr+1 < len(smiles):
+            if element == 'B' and smiles[ptr+1] == 'r':
+                element += smiles[ptr+1]
+                ptr += 1
+            if element == 'C' and smiles[ptr+1] == 'l':
+                element += smiles[ptr+1]
+                ptr += 1
 
         atom = mol.AddAtom()
         atom.element = element
@@ -235,9 +239,6 @@ def generateSmiles(mol):
     stack = [(-1, 0)]
     rcbond = []
 
-    for atom in mol.atoms:
-        atom.nbr = sorted(atom.nbr)
-
     while stack:
         prev, idx = stack.pop()
         if not visited[idx]:
@@ -245,17 +246,13 @@ def generateSmiles(mol):
             mol.atoms[idx].newidx = len(order) - 1
             visited[idx] = True
             atom = mol.atoms[idx]
-            nbr = copy.deepcopy(atom.nbr)
-            if atom.tetrahedralStereo != 'Clockwise':  # need to maintain order
-                if atom.hcount == 1:
-                    nbr = reversed(nbr)
-                elif atom.hcount == 0 and len([True for n in nbr if n < idx]) < 1:
-                    nbr = reversed(nbr)
+            if atom.tetrahedralStereo == 'Clockwise':
+                if atom.nbr[2] == prev:
+                    atom.nbr[:2] = [atom.nbr[1], atom.nbr[0]]
                 else:
-                    nbr[1:] = reversed(nbr[1:])
-            else:
-                nbr = [nbr[-2], nbr[-1]] + list(reversed(nbr[:-2]))
-
+                    atom.nbr[-2:] = [atom.nbr[-1], atom.nbr[-2]]
+                
+            nbr = reversed(atom.nbr)
             for a in nbr:
                 if not visited[a]:
                     stack.append((idx, a))
@@ -285,23 +282,31 @@ def generateSmiles(mol):
                 if not usedDigit:
                     digit = 1
                 else:
-                    digit = min(usedDigit) + 1
+                    digit = max(usedDigit) + 1
                 usedDigit.append(digit)
                 rc = ringClosure(digit, idx, -1)
                 rcstack.append(rc)
                 smiles += str(digit)
             # if there is branch (buggy)
-            branch = sorted([(mol.atoms[n].newidx, n) for n in atom.nbr if n != prev and (idx, n) not in rcbond])
-            branch = [i for newidx, i in branch]
+            branch = [n for n in atom.nbr if n != prev and (idx, n) not in rcbond]
             if not branch:
                 return idx, smiles
             while len(branch) > 1:
-                smiles += '('
-                pstack.append(idx)
                 bidx = branch.pop(0)
-                _, branch_smiles = generateBranchSmiles(bidx)
-                smiles += branch_smiles
-                smiles += ')'
+                # check ring closure
+                isRingClosure = False
+                for rc in rcstack:
+                    if rc.prev == bidx:
+                        smiles += str(rc.digit)
+                        rcstack.remove(rc)
+                        isRingClosure = True
+                        break
+                if not isRingClosure:
+                    smiles += '('
+                    pstack.append(idx)
+                    _, branch_smiles = generateBranchSmiles(bidx)
+                    smiles += branch_smiles
+                    smiles += ')'
             nidx = branch.pop()
             # if end of ring
             if mol.atoms[nidx].newidx < atom.newidx:
@@ -311,8 +316,10 @@ def generateSmiles(mol):
                     if rc.prev == nidx:
                         smiles += str(rc.digit)
                         rcstack.remove(rc)
+                        usedDigit.remove(rc.digit)
                         return idx, smiles
-                        #usedDigit.remove(rc.digit)
+                print("something is wrong!")
+                exit()
             # ordinary case
             else:
                 for b in mol.bonds:
@@ -321,6 +328,7 @@ def generateSmiles(mol):
                             smiles += '='
                         elif b.order == 3:
                             smiles += '#'
+
                 prev = idx
                 idx = nidx
     pstack = [-1]
@@ -335,9 +343,13 @@ def evaluate(smiles):
 
 evaluate('N[C@](O)(Br)C')
 evaluate('N[C@@](O)(Br)C')
+evaluate('N[C@H](O)C')
+evaluate('N[C@@H](O)C')
 evaluate('[C@H](N)(O)C')
 evaluate('[C@@H](N)(O)C')
 evaluate('[C@](Br)(N)(O)C')
 evaluate('[C@@](Br)(N)(O)C')
 evaluate('[C@]1(Br)(Cl)CCCC(F)C1')
 evaluate('[C@@]1(Br)(Cl)CCCC(F)C1')
+evaluate('N1C[C@H]2CC=CC[C@@H]2C1')
+evaluate('C[C@@H]1CC(Nc2cncc(-c3nncn3C)c2)C[C@@H](C)C1')
