@@ -1,6 +1,11 @@
 # Stereo SMILES Converter
 ```
 $ python parser.py 
+True F/C=C(\Cl)/I -> F/C=C(\Cl)/I
+True F/C=C(/Cl)\I -> F/C=C(\I)/Cl
+True F/C=C/I -> F/C=C([H])/I
+True F/C=C\I -> F/C=C(\I)[H]
+True F/C=C/F -> F/C=C([H])/F
 True N[C@](O)(Br)C -> N[C@](O)(Br)C
 True N[C@@](O)(Br)C -> N[C@](O)(C)Br
 True N[C@H](O)C -> N[C@H](O)C
