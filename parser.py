@@ -95,6 +95,7 @@ def smilesToMol(smiles):
         updown = ''
 
         prev = atom.idx
+        order = 0
         return True
 
     def parseRingBond():
@@ -274,28 +275,36 @@ def generateSmiles(mol):
             atom = mol.atoms[idx]
             # reorder tetrahedral stereochemistry
             if atom.tetrahedralStereo == 'Clockwise':
+                print(prev, atom.nbr)
                 if atom.nbr[2] == prev:
                     atom.nbr[:2] = [atom.nbr[1], atom.nbr[0]]
+                elif atom.nbr[1] == prev:
+                    pass
                 else:
                     atom.nbr[-2:] = [atom.nbr[-1], atom.nbr[-2]]
             elif atom.tetrahedralStereo == 'CounterClockwise':
                 if atom.nbr[1] == prev:
                     atom.nbr[0], atom.nbr[2] = atom.nbr[2], atom.nbr[0]
+                elif len(atom.nbr) == 4 and atom.nbr[3] == prev:
+                    atom.nbr[0], atom.nbr[2] = atom.nbr[2], atom.nbr[0]
 
             # reorder cis/trans stereochemistry
             if mol.bonds[bondnum].order == 2:
-                for nidx in atom.nbr:
-                    bidx = mol.GetBond(idx, nidx)
-                    if bidx in mol.upDownMap:
-                        # Add hydrogen
-                        if len(atom.nbr) == 2:
-                            hatom = mol.AddAtom()
-                            hatom.element = 'H'
-                            mol.AddBond(idx, hatom.idx, 1)
-                            visited.append(False)
-                        if mol.upDownMap[bidx] == updown:
-                            atom.nbr[1], atom.nbr[2] = atom.nbr[2], atom.nbr[1]
-                        break
+                if len(atom.nbr) == 3:
+                    bondnum = mol.GetBond(idx, atom.nbr[1])
+                    bondnum2 = mol.GetBond(idx, atom.nbr[2])
+                    if bondnum in mol.upDownMap and bondnum2 not in mol.upDownMap:
+                        if mol.upDownMap[bondnum] == '\\':
+                            mol.upDownMap[bondnum2] = '/'
+                        elif mol.upDownMap[bondnum] == '/':
+                            mol.upDownMap[bondnum2] = '\\'
+                    if bondnum2 in mol.upDownMap and bondnum not in mol.upDownMap:
+                        if mol.upDownMap[bondnum2] == '\\':
+                            mol.upDownMap[bondnum] = '/'
+                        elif mol.upDownMap[bondnum2] == '/':
+                            mol.upDownMap[bondnum] = '\\'
+                    if bondnum in mol.upDownMap and mol.upDownMap[bondnum] == updown:
+                        atom.nbr[1], atom.nbr[2] = atom.nbr[2], atom.nbr[1]
 
             nbr = reversed(atom.nbr)
             for a in nbr:
@@ -305,6 +314,12 @@ def generateSmiles(mol):
                     mol.atoms[a].ringClosure = True
                     rcbond.append((a, idx))
 
+    for atom in mol.atoms:
+        print(atom)
+    #for bond in mol.bonds:
+    #    print(bond)
+    #print(mol.upDownMap)
+
     usedDigit = []
     rcstack = []
     pstack = []
@@ -312,31 +327,27 @@ def generateSmiles(mol):
     def generateBranchSmiles(idx):
         nonlocal mol, order, usedDigit, rcstack, rcbond, pstack
         smiles = ""
+        updown = ''
         prev = pstack.pop()
         while True:
             atom = mol.atoms[idx]
             if atom.tetrahedralStereo is None:
-                if atom.charge == 0:
-                    if atom.element == 'H':
-                        smiles += '[H]'
-                    else:
-                        smiles += atom.element
+                if atom.charge == 0 and atom.hcount == 0:
+                    smiles += atom.element
                 else:
-                    if atom.charge == -1:
-                        smiles += '[{}-]'.format(atom.element)
-                    elif atom.charge == +1:
-                        if atom.hcount == +1:
-                            smiles += '[{}H+]'.format(atom.element)
-                        elif atom.hcount == +2:
-                            smiles += '[{}H2+]'.format(atom.element)
-                        elif atom.hcount == +3:
-                            smiles += '[{}H3+]'.format(atom.element)
-                        else:
-                            print('Unsupported!')
-                            exit()
-                    else:
-                        print('Unsupported!')
-                        exit()
+                    s_charge = ''
+                    if atom.charge > 0:
+                        s_charge = '+'
+                    elif atom.charge < 0:
+                        s_charge = '-'
+                    if abs(atom.charge) > 1:
+                        s_charge += str(abs(atom.charge))
+                    s_hcount = ''
+                    if atom.hcount > 0:
+                        s_hcount = 'H'
+                        if atom.hcount > 1:
+                            s_hcount += str(atom.hcount)
+                    smiles += '[{}{}{}]'.format(atom.element, s_hcount, s_charge)
             else:
                 smiles += '[' + atom.element + '@'
                 if atom.hcount == 1:
@@ -369,7 +380,7 @@ def generateSmiles(mol):
                 if not isRingClosure:
                     smiles += '('
                     for i, b in enumerate(mol.bonds):
-                        if b.begin == idx and b.end == bidx:
+                        if (b.begin == idx and b.end == bidx) or (b.begin == bidx and b.end == idx):
                             if b.order == 1:
                                 if i in mol.upDownMap:
                                     smiles += mol.upDownMap[i]
@@ -396,16 +407,29 @@ def generateSmiles(mol):
                 exit()
             # ordinary case
             else:
+                isTransBranch = False
                 for i, b in enumerate(mol.bonds):
-                    if b.begin == idx and b.end == nidx:
+                    if (b.begin == idx and b.end == nidx) or (b.begin == nidx and b.end == idx):
                         if b.order == 1:
                             if i in mol.upDownMap:
-                                smiles += mol.upDownMap[i]
+                                if updown == mol.upDownMap[i]:
+                                    smiles += '('
+                                    smiles += mol.upDownMap[i]
+                                    pstack.append(idx)
+                                    _, branch_smiles = generateBranchSmiles(nidx)
+                                    smiles += branch_smiles
+                                    smiles += ')'
+                                    isTransBranch = True
+                                    break
+                                else:
+                                    smiles += mol.upDownMap[i]
+                                    updown = mol.upDownMap[i]
                         elif b.order == 2:
                             smiles += '='
                         elif b.order == 3:
                             smiles += '#'
-
+                if isTransBranch:
+                    return idx, smiles
                 prev = idx
                 idx = nidx
     pstack = [-1]
@@ -415,43 +439,18 @@ def generateSmiles(mol):
 def validate(smiles):
     mol = smilesToMol(smiles)
     new_smiles = generateSmiles(mol)
+    #print(new_smiles)
     isCorrect = (Chem.MolToSmiles(Chem.MolFromSmiles(smiles)) == Chem.MolToSmiles(Chem.MolFromSmiles(new_smiles)))
-    print(isCorrect, smiles, '->', new_smiles)
+    return isCorrect, new_smiles
 
-validate('F/C=C(\Cl)/I')
-validate('F/C=C(/Cl)\I')
-validate('F/C=C/I')
-validate('F/C=C\I')
-validate('F/C=C/F')
-validate('N[C@](O)(Br)C')
-validate('N[C@@](O)(Br)C')
-validate('N[C@H](O)C')
-validate('N[C@@H](O)C')
-validate('[C@H](N)(O)C')
-validate('[C@@H](N)(O)C')
-validate('[C@](Br)(N)(O)C')
-validate('[C@@](Br)(N)(O)C')
-validate('[C@]1(Br)(Cl)CCCC(F)C1')
-validate('[C@@]1(Br)(Cl)CCCC(F)C1')
-validate('N1C[C@H]2CC=CC[C@@H]2C1')
-validate('C[C@@H]1CC(Nc2cncc(-c3nncn3C)c2)C[C@@H](C)C1')
-validate('N#Cc1ccc(-c2ccc(O[C@@H](C(=O)N3CCCC3)c3ccccc3)cc2)cc1')
-validate('CCOC(=O)[C@@H]1CCCN(C(=O)c2nc(-c3ccc(C)cc3)n3c2CCCCC3)C1')
-validate('N#CC1=C(SCC(=O)Nc2cccc(Cl)c2)N=C([O-])[C@H](C#N)C12CCCCC2')
-validate('CC[NH+](CC)[C@](C)(CC)[C@H](O)c1cscc1Br')
-validate('C[C@@H]1CN(C(=O)c2cc(Br)cn2C)CC[C@H]1[NH3+]')
-validate('CCOc1ccc(OCC)c([C@H]2C(C#N)=C(N)N(c3ccccc3C(F)(F)F)C3=C2C(=O)CCC3)c1')
-validate('Cc1ccc2nc(S[C@H](C)C(=O)NC3CCC(C)CC3)n(C)c(=O)c2c1')
-validate('Cc1ccccc1C(=O)N1CCC2(CC1)C[C@H](c1ccccc1)C(=O)N2C')
-validate('CC(C)Cc1nc(SCC(=O)NC[C@@H]2CCCO2)c2c(=O)n(C)c(=O)n(C)c2n1')
-validate('Cc1ccc(CNC(=O)c2ccccc2NC(=O)[C@@H]2CC(=O)N(c3ccc(C)cc3)C2)cc1')
-validate('CC(C)[C@@H](Oc1cccc(Cl)c1)C(=O)N1CCC(n2cccn2)CC1')
-validate('CCN(CC)C(=O)C[C@@H](C)[NH2+][C@H](C)c1cccc(F)c1F')
-validate('O=C(NCCNC(=O)N1C[C@H]2CC=CC[C@@H]2C1)c1cccnc1')
-validate('Cc1ccc(N2CC[C@@H](NS(=O)(=O)c3ccccc3C)C2=O)cc1C')
-validate('CC[C@H](C)C[C@@H](C)NC(=O)N1CCN(CC(=O)NC2CC2)CC1')
-validate('CC(=O)Nc1c2n(c3ccccc13)C[C@](C)(C(=O)NC1CCCCC1)N(C1CCCCC1)C2=O')
-validate('N#Cc1ccncc1NC[C@@H]1C[C@@]12CCc1ccccc12')
-validate('CCOC(=O)c1nnc2ccccc2c1N1CC[C@@H]([NH+](CC)CC)C1')
-validate('CCC[NH2+][C@@H]1COC[C@H]1C(=O)NCc1cscc1C')
-validate('CC(=O)c1ccc(S(=O)(=O)N2CCCC[C@H]2C)cc1')
+#with open('250k_rndm_zinc_drugs_clean.smi') as f:
+#    for i, line in enumerate(f):
+#        smiles = line.rstrip()
+#        result, new_smiles = validate(smiles)
+#        if not result:
+#            print(i)
+#            print(smiles)
+#            print(new_smiles)
+#            break
+
+print(validate('C/N=C1\\N[C@H]2CC(C[C@H](S1)2)'))
