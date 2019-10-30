@@ -2,6 +2,10 @@ from rdkit import Chem
 import copy
 
 def smilesToMol(smiles):
+    # normalize
+    smiles = smiles.replace('[C@H]', '[C@]([H])')
+    smiles = smiles.replace('[C@@H]', '[C@@]([H])')
+
     prev = -1
     vprev = []
     rclose = []
@@ -113,6 +117,8 @@ def smilesToMol(smiles):
                 if bondOrder == 0:
                     bondOrder = 1
                 mol.AddBond(rc.prev, prev, bondOrder)
+                i = mol.atoms[rc.prev].nbr2.index(-digit)
+                mol.atoms[rc.prev].nbr2[i] = mol.atoms[rc.prev].nbr2.pop()
                 if updown == '/' or updown == '\\':
                     mol.upDownMap[len(mol.bonds)-1] = updown
                 if rc.updown == '/' or rc.updown == '\\':
@@ -126,6 +132,7 @@ def smilesToMol(smiles):
                 return True
         # no closure
         rclose.append(ringClosure(digit, prev, order, updown))
+        mol.atoms[prev].nbr2.append(-digit)
         order = 0
         updown = ''
         return True
@@ -200,6 +207,8 @@ class Molecule:
         self.bonds.append(bond)
         self.atoms[begin].nbr.append(end)
         self.atoms[end].nbr.append(begin)
+        self.atoms[begin].nbr2.append(end)
+        self.atoms[end].nbr2.append(begin)
         return bond
 
     def GetBond(self, idx):
@@ -226,11 +235,12 @@ class Atom:
         self.hcount = 0
         self.newidx = -1
         self.nbr = []
+        self.nbr2 = []
         self.tetrahedralStereo = None
         self.ringClosure = False
 
     def __repr__(self):
-        return "({}, idx: {}, newidx: {}, charge: {}, h: {}, nbr: {}, rc: {}, {})".format(self.element, self.idx, self.newidx, self.charge, self.hcount, self.nbr, self.ringClosure, self.tetrahedralStereo)
+        return "({}, idx: {}, newidx: {}, charge: {}, h: {}, nbr: {}, nbr2: {}, rc: {}, {})".format(self.element, self.idx, self.newidx, self.charge, self.hcount, self.nbr, self.nbr2, self.ringClosure, self.tetrahedralStereo)
 
 
 class Bond:
@@ -275,18 +285,10 @@ def generateSmiles(mol):
             atom = mol.atoms[idx]
             # reorder tetrahedral stereochemistry
             if atom.tetrahedralStereo == 'Clockwise':
-                print(prev, atom.nbr)
-                if atom.nbr[2] == prev:
-                    atom.nbr[:2] = [atom.nbr[1], atom.nbr[0]]
-                elif atom.nbr[1] == prev:
-                    pass
-                else:
-                    atom.nbr[-2:] = [atom.nbr[-1], atom.nbr[-2]]
+                atom.nbr[-2:] = [atom.nbr[-1], atom.nbr[-2]]
+                atom.nbr2[-2:] = [atom.nbr2[-1], atom.nbr2[-2]]
             elif atom.tetrahedralStereo == 'CounterClockwise':
-                if atom.nbr[1] == prev:
-                    atom.nbr[0], atom.nbr[2] = atom.nbr[2], atom.nbr[0]
-                elif len(atom.nbr) == 4 and atom.nbr[3] == prev:
-                    atom.nbr[0], atom.nbr[2] = atom.nbr[2], atom.nbr[0]
+                pass
 
             # reorder cis/trans stereochemistry
             if mol.bonds[bondnum].order == 2:
@@ -313,6 +315,7 @@ def generateSmiles(mol):
                 elif a != prev:
                     mol.atoms[a].ringClosure = True
                     rcbond.append((a, idx))
+    print(rcbond)
 
     for atom in mol.atoms:
         print(atom)
@@ -333,7 +336,10 @@ def generateSmiles(mol):
             atom = mol.atoms[idx]
             if atom.tetrahedralStereo is None:
                 if atom.charge == 0 and atom.hcount == 0:
-                    smiles += atom.element
+                    if atom.element == 'H':
+                        smiles += '[H]'
+                    else:
+                        smiles += atom.element
                 else:
                     s_charge = ''
                     if atom.charge > 0:
@@ -353,22 +359,24 @@ def generateSmiles(mol):
                 if atom.hcount == 1:
                     smiles += 'H'
                 smiles += ']'
-            # if ring is starting
-            if atom.ringClosure:
-                if not usedDigit:
-                    digit = 1
-                else:
-                    digit = max(usedDigit) + 1
-                usedDigit.append(digit)
-                rc = ringClosure(digit, idx, -1)
-                rcstack.append(rc)
-                smiles += str(digit)
             # if there is branch
-            branch = [n for n in atom.nbr if n != prev and (idx, n) not in rcbond]
+            branch = [n for n in atom.nbr2 if n != prev]
             if not branch:
                 return idx, smiles
             while len(branch) > 1:
                 bidx = branch.pop(0)
+                print(idx, bidx)
+                # if ring is starting
+                if (idx, bidx) in rcbond:
+                    if not usedDigit:
+                        digit = 1
+                    else:
+                        digit = max(usedDigit) + 1
+                    usedDigit.append(digit)
+                    rc = ringClosure(digit, idx, -1)
+                    rcstack.append(rc)
+                    smiles += str(digit)
+                    continue
                 # check ring closure
                 isRingClosure = False
                 for rc in rcstack:
@@ -439,7 +447,7 @@ def generateSmiles(mol):
 def validate(smiles):
     mol = smilesToMol(smiles)
     new_smiles = generateSmiles(mol)
-    #print(new_smiles)
+    print(new_smiles)
     isCorrect = (Chem.MolToSmiles(Chem.MolFromSmiles(smiles)) == Chem.MolToSmiles(Chem.MolFromSmiles(new_smiles)))
     return isCorrect, new_smiles
 
@@ -453,4 +461,4 @@ def validate(smiles):
 #            print(new_smiles)
 #            break
 
-print(validate('C/N=C1\\N[C@H]2CC(C[C@H](S1)2)'))
+print(validate('CCOC(=O)[C@@H]1CCCN(C(=O)c2nc(-c3ccc(C)cc3)n3c2CCCCC3)C'))
